@@ -108,7 +108,7 @@ def link_object_openscenario(context, obj, subcategory=None):
         collection = bpy.data.collections.get('OpenSCENARIO').children.get(subcategory)
         collection.objects.link(obj)
 
-def get_object_xodr_by_id(context, id_xodr):
+def get_object_xodr_by_id(id_xodr):
     '''
         Get reference to OpenDRIVE object by ID, return None if not found.
     '''
@@ -127,19 +127,17 @@ def create_object_xodr_links(context, obj, link_type, cp_type, id_other, id_conn
         if link_type == 'start':
             obj['link_predecessor_id_l'] =  id_other
             obj['link_predecessor_cp_l'] = cp_type
-            if id_connected_junction != None:
-                obj['id_xodr_direct_junction_start'] = id_connected_junction
         else:
             obj['link_successor_id_l'] = id_other
             obj['link_successor_cp_l'] = cp_type
-            if id_connected_junction != None:
-                obj['id_xodr_direct_junction_end'] = id_connected_junction
+        if id_connected_junction != None:
+           obj['id_xodr_direct_junction'] = id_connected_junction
     elif 'junction' in obj.name:
         if link_type == 'start':
             obj['incoming_roads']['cp_left'] = id_other
         else:
             obj['incoming_roads']['cp_right'] = id_other
-    obj_other = get_object_xodr_by_id(context, id_other)
+    obj_other = get_object_xodr_by_id(id_other)
     if 'road' in obj_other.name:
         if 'road' in obj.name:
             if link_type == 'start':
@@ -160,7 +158,7 @@ def create_object_xodr_links(context, obj, link_type, cp_type, id_other, id_conn
         elif cp_type == 'cp_end_l':
             obj_other['link_successor_id_l'] = obj['id_xodr']
             obj_other['link_successor_cp_l'] = cp_type_other
-        elif cp_type == 'cp_end_l':
+        elif cp_type == 'cp_end_r':
             obj_other['link_successor_id_r'] = obj['id_xodr']
             obj_other['link_successor_cp_r'] = cp_type_other
     elif obj_other.name.startswith('junction'):
@@ -331,10 +329,14 @@ def mouse_to_object_params(context, event, filter):
                     hit = True
                     point_type, snapped_point, heading, curvature, slope = point_to_road_connector(obj, point_raycast)
                     id_obj = obj['id_xodr']
-                    # TODO also implement direct junction for start of road
-                    if point_type == 'cp_end_l' or point_type == 'cp_end_r':
-                        if 'id_xodr_direct_junction_end' in obj:
-                            id_connected_junction = obj['id_xodr_direct_junction_end']
+                    if obj['road_split_type'] == 'end':
+                        if point_type == 'cp_end_l' or point_type == 'cp_end_r':
+                            if 'id_xodr_direct_junction' in obj:
+                                id_connected_junction = obj['id_xodr_direct_junction']
+                    if obj['road_split_type'] == 'start':
+                        if point_type == 'cp_start_l' or point_type == 'cp_start_r':
+                            if 'id_xodr_direct_junction' in obj:
+                                id_connected_junction = obj['id_xodr_direct_junction']
                 if obj['dsc_type'] == 'junction':
                     hit = True
                     point_type, snapped_point, heading = point_to_junction_connector(obj, point_raycast)

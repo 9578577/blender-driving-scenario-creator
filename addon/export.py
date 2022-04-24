@@ -276,17 +276,15 @@ class DSC_OT_export(bpy.types.Operator):
                             cp_type = xodr.ContactPoint.end
                         else:
                             cp_type = None
-                        if 'id_xodr_direct_junction_start' in obj:
+                        if 'id_xodr_direct_junction' in obj:
                             # Connect to direction junction attached to the other (split) road
-                            lane_offset = self.get_lane_offset(obj,obj['link_predecessor_id_l'])
-                            road.add_predecessor(xodr.ElementType.junction, obj['id_xodr_direct_junction_start'],
-                                cp_type, lane_offset, direct_junction=[obj['link_predecessor_id_l']])
+                            road.add_predecessor(xodr.ElementType.junction, obj['id_xodr_direct_junction'])
                         else:
                             road.add_predecessor(element_type, obj['link_predecessor_id_l'], cp_type)
                     if 'link_successor_id_l' in obj:
                         if obj['road_split_type'] != 'none':
                             # Attach to direct junction from the split road
-                            road.add_successor(xodr.ElementType.junction, obj['id_xodr_direct_junction_end'],
+                            road.add_successor(xodr.ElementType.junction, obj['id_xodr_direct_junction'],
                                 direct_junction=[obj['link_successor_id_l'], obj['link_successor_id_r']])
                         else:
                             # TODO also make it work for predecessors
@@ -299,11 +297,9 @@ class DSC_OT_export(bpy.types.Operator):
                                 cp_type = xodr.ContactPoint.end
                             else:
                                 cp_type = None
-                            if 'id_xodr_direct_junction_end' in obj:
+                            if 'id_xodr_direct_junction' in obj:
                                 # Connect to direction junction attached to the other (split) road
-                                lane_offset = self.get_lane_offset(obj,obj['link_successor_id_l'])
-                                road.add_successor(xodr.ElementType.junction, obj['id_xodr_direct_junction_end'],
-                                    cp_type, lane_offset, direct_junction=[obj['link_successor_id_l']])
+                                road.add_successor(xodr.ElementType.junction, obj['id_xodr_direct_junction'])
                             else:
                                 road.add_successor(element_type, obj['link_successor_id_l'], cp_type)
                     print('Add road with ID', obj['id_xodr'])
@@ -313,15 +309,27 @@ class DSC_OT_export(bpy.types.Operator):
             for obj in bpy.data.collections['OpenDRIVE'].objects:
                 if obj.name.startswith('road'):
                     if obj['road_split_type'] != 'none':
-                        if 'link_successor_id_l' in obj and 'link_successor_id_r' in obj:
+                        if ('link_predecessor_id_l' in obj and 'link_predecessor_id_r' in obj) \
+                                or ('link_successor_id_l' in obj and 'link_successor_id_r' in obj):
+                            dj_creator = xodr.DirectJunctionCreator(id='id_xodr_direct_junction',
+                                name='direct_junction_'+str(obj['id_xodr_direct_junction']))
                             road_in = self.get_road_by_id(roads, obj['id_xodr'])
-                            road_out_l = self.get_road_by_id(roads, obj['link_successor_id_l'])
-                            road_out_r = self.get_road_by_id(roads, obj['link_successor_id_r'])
-                            direct_junction = xodr.create_direct_junction(
-                                [road_in, road_out_l, road_out_r],
-                                id=obj['id_xodr_direct_junction_end'],
-                                name='direct_junction_'+str(obj['id_xodr_direct_junction_end']))
-                            odr.add_junction(direct_junction)
+                            if obj['road_split_type'] != 'start':
+                                road_out_l = self.get_road_by_id(roads, obj['link_successor_id_l'])
+                                road_out_r = self.get_road_by_id(roads, obj['link_successor_id_r'])
+                            elif obj['road_split_type'] != 'end':
+                                road_out_l = self.get_road_by_id(roads, obj['link_predecessor_id_l'])
+                                road_out_r = self.get_road_by_id(roads, obj['link_predecessor_id_r'])
+                            road_obj_in = helpers.get_object_xodr_by_id(obj['id_xodr'])
+                            lane_ids_road_in_l = self.get_lanes_ids_to_link(road_obj_in, 'cp_end_l')
+                            lane_ids_road_in_r = self.get_lanes_ids_to_link(road_obj_in, 'cp_end_r')
+                            road_obj_out_l = helpers.get_object_xodr_by_id(obj['link_successor_id_l'])
+                            lane_ids_road_out_l = self.get_lanes_ids_to_link(road_obj_out_l, obj['link_successor_cp_l'])
+                            road_obj_out_r = helpers.get_object_xodr_by_id(obj['link_successor_id_r'])
+                            lane_ids_road_out_r = self.get_lanes_ids_to_link(road_obj_out_r, obj['link_successor_cp_r'])
+                            dj_creator.add_connection(road_in, road_out_l, lane_ids_road_in_l, lane_ids_road_out_l)
+                            dj_creator.add_connection(road_in, road_out_r, lane_ids_road_in_r, lane_ids_road_out_r)
+                            odr.add_junction(dj_creator.junction)
                         else:
                             print('WARNING: Direct junction of road with ID {} not fully connected.'.format(obj['id_xodr']))
         # Add lane level linking for all roads
@@ -498,6 +506,9 @@ class DSC_OT_export(bpy.types.Operator):
             elif obj.name.startswith('junction'):
                 if obj['id_xodr'] == id:
                     return xodr.ElementType.junction
+            elif obj.name.startswith('direct_junction'):
+                if obj['id_xodr'] == id:
+                    return xodr.ElementType.junction
 
     def get_road_by_id(self, roads, id):
         '''
@@ -548,6 +559,48 @@ class DSC_OT_export(bpy.types.Operator):
         lanes.add_lanesection(lanesection)
 
         return lanes
+
+    def get_lanes_ids_to_link(self, road_obj, cp_type):
+        '''
+            Get the lane IDs with non-zero lane width which should be linked.
+        '''
+        # Helper function for conditional comparison
+        def comp_lane_idx(idx, road_obj, cp_type):
+            if cp_type == 'cp_start_l' or cp_type == 'cp_end_l':
+                in_range = idx < road_obj['road_split_lane_idx']
+            if cp_type == 'cp_start_r' or cp_type == 'cp_end_r':
+                in_range = idx >= road_obj['road_split_lane_idx']
+            return in_range
+        lane_ids_to_link = []
+        # Count lanes to return right number of lanes in case of split
+        idx = 0
+        if cp_type == 'cp_end_l' or cp_type == 'cp_end_r':
+            for lane_idx in range(road_obj['lanes_left_num']):
+                if comp_lane_idx(idx, road_obj, cp_type):
+                    if road_obj['lanes_left_widths_change'][lane_idx] != 'open':
+                        lane_ids_to_link.append(road_obj['lanes_left_num']-lane_idx)
+                idx +=1
+            # Count centerlane
+            idx += 1
+            for lane_idx in range(road_obj['lanes_right_num']):
+                if comp_lane_idx(idx, road_obj, cp_type):
+                    if road_obj['lanes_right_widths_change'][lane_idx] != 'open':
+                        lane_ids_to_link.append(-lane_idx-1)
+                idx +=1
+        if cp_type == 'cp_start_l' or cp_type == 'cp_start_r':
+            for lane_idx in range(road_obj['lanes_left_num']):
+                if comp_lane_idx(idx, road_obj, cp_type):
+                    if road_obj['lanes_left_widths_change'][lane_idx] != 'close':
+                        lane_ids_to_link.append(road_obj['lanes_left_num']-lane_idx)
+                idx +=1
+            # Count centerlane
+            idx += 1
+            for lane_idx in range(road_obj['lanes_right_num']):
+                if comp_lane_idx(idx, road_obj, cp_type):
+                    if road_obj['lanes_right_widths_change'][lane_idx] != 'close':
+                        lane_ids_to_link.append(-lane_idx-1)
+                idx +=1
+        return lane_ids_to_link
 
     def calculate_trajectory_values(self, obj, speed):
         times = [0]
